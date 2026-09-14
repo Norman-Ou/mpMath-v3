@@ -3,3 +3,4 @@ mpMath.pem
 node_modules/
 test-results/
 playwright-report/
+dist/

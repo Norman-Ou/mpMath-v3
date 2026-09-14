@@ -22,10 +22,12 @@
 1. 下载 [mpMath-v3-0.3.0.zip](https://github.com/Norman-Ou/mpMath-v3/releases/download/v0.3.0/mpMath-v3-0.3.0.zip)，并解压到一个长期保留的文件夹。
 2. 在桌面 Chrome 打开 `chrome://extensions/`。
 3. 开启右上角「开发者模式」。
-4. 点击「加载已解压的扩展程序」，选择解压后的 **`mpMath` 文件夹**，其中应直接包含 `manifest.json`。
+4. 点击「加载已解压的扩展程序」，选择解压后的 **`mpMath-v3-0.3.0` 文件夹**，其中应直接包含 `manifest.json`、`assets` 和 `pages`。
 5. 停用旧版 mpMath，再打开或刷新微信公众号图文编辑页面。
 
 也可以下载本仓库源码，选择其中的 `mpMath` 子目录加载。安装和使用无需运行 npm，公式渲染脚本随扩展提供。
+
+如果提示「清单文件缺失或不可读取」，请检查所选目录是否直接包含 `manifest.json`。早期下载的 0.3.0 安装包多嵌套了一层目录，请选择其内层 `mpMath` 文件夹，或重新下载已修正的安装包。
 
 更新时替换文件，在扩展管理页点击「重新加载」，再刷新公众号页面。本仓库的修复通过 GitHub 发布，原项目的商店版本与旧 CRX 不代表本版本。
 
@@ -64,6 +66,8 @@ npm test
 ```
 
 默认使用 Playwright 随附的 Chromium。设置 `MPMATH_CHROME_PATH` 为 Chrome for Testing 的可执行文件路径可验证指定版本。
+
+打包发布附件：运行 `python3 scripts/package_extension.py`（需要 Python 3），在 `dist` 中生成 ZIP。安装包根目录直接包含 `manifest.json`，可解压后直接加载。
 
 测试拦截公众号域名请求，提供本地 UEditor 模拟页面，不使用公众号账号或真实草稿。覆盖 Manifest V3 后台、公式插入与再次编辑、快捷键、延迟加载、渲染失败恢复、消息来源检查、SVG 修复，以及后台实际停止后的运行。
 
