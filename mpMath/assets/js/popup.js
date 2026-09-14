@@ -1,115 +1,126 @@
-// 修改MathJax全局配置，使微信编辑器能保存下来
-MathJax = {
-    svg: { fontCache: 'none' },
-    tex: { tags: 'ams' }
-};
+(() => {
+    const input = document.getElementById('input');
+    const block = document.getElementById('block');
+    const insert = document.getElementById('insert');
+    const output = document.getElementById('output');
+    let parentOrigin = null;
+    let generation = 0;
+    let rendered = null;
+    let submitting = false;
+    let renderQueue = Promise.resolve();
 
-let input = document.getElementById('input');
-let block = document.getElementById('block');
-let insert = document.getElementById('insert');
-
-// 判断输入是否为空
-function checkNull(str) {
-    if (str.length == 0) {
-        insert.disabled = true;
-        $(insert).addClass('weui-desktop-btn_disabled');
-    } else {
-        insert.disabled = false;
-        $(insert).removeClass('weui-desktop-btn_disabled');
-    }
-}
-
-// Tex代码转SVG图像
-function convert() {
-    let inputTex = document.getElementById("input").value.trim();
-    checkNull(inputTex);
-
-    output = document.getElementById('output');
-    output.innerHTML = '';
-
-    MathJax.texReset();
-    let options = MathJax.getMetricsFor(output);
-    options.display = block.checked;
-    MathJax.tex2svgPromise(inputTex, options).then(function(node) {
-        output.appendChild(node);
-        MathJax.startup.document.clear();
-        MathJax.startup.document.updateDocument();
-    }).catch(function(err) {
-        output.appendChild(document.createElement('pre')).appendChild(document.createTextNode(err.message));
-    }).then(function() {
-        inputTex.disabled = false;
-    });
-}
-
-// 请求关闭公式编辑页面
-function closeFrame() {
-    parent.window.postMessage({ type: 'CLOSE_FORMULA' }, '*');
-}
-
-function insertFormula() {
-    if (insert.disabled == true) return;
-
-    // 将生成的mjx-container套在span中
-    let output = document.getElementById('output');
-    let sp = document.createElement('span');
-    if ($(block).prop('checked')) {
-        output.childNodes[0].style = 'overflow-x:auto; outline:0; display:block; text-align: center; margin: 15px 0px;'
-        output.childNodes[0].setAttribute('display', true);
-        output.childNodes[0].childNodes[0].style = 'height:auto; max-width:300% !important;'
+    function enableInsert(enabled) {
+        insert.disabled = !enabled;
+        insert.classList.toggle('weui-desktop-btn_disabled', !enabled);
     }
 
-    //output.childNodes[0].setAttribute('data-formula', input.value.trim().replace(/\\/g, '\\\\'));
-    output.childNodes[0].setAttribute('data-formula', input.value.trim());
-    sp.setAttribute('style', 'cursor:pointer;');
-    sp.appendChild(output.childNodes[0]);
-    sp.innerHTML = sp.innerHTML.replace(/<mjx-assistive-mml.+?<\/mjx-assistive-mml>/g, "");
+    function send(message) {
+        if (parentOrigin) parent.postMessage(message, parentOrigin);
+    }
 
-    parent.window.postMessage({ type: 'INSERT_FORMULA', text: sp.outerHTML }, '*');
-    input.value = '';
-    closeFrame();
-}
+    function showError(message) {
+        const error = document.createElement('pre');
+        error.textContent = message;
+        output.replaceChildren(error);
+    }
 
-$(function() {
-    input.oninput = convert;
-    block.onchange = convert;
-    insert.onclick = insertFormula;
-    document.getElementById('close').onclick = closeFrame;
-    document.getElementById('cancel').onclick = closeFrame;
+    function convert() {
+        const current = ++generation;
+        const text = input.value.trim();
+        const display = block.checked;
+        rendered = null;
+        enableInsert(false);
+        output.replaceChildren();
+        if (!text) return;
+        // MathJax has shared state: serialize conversions and discard superseded work.
+        renderQueue = renderQueue.then(async () => {
+            if (current !== generation) return;
+            try {
+                if (!window.MathJax?.startup?.promise) throw new Error('公式渲染器加载失败，请重新加载扩展。');
+                await MathJax.startup.promise;
+                if (current !== generation) return;
+                MathJax.texReset();
+                const options = MathJax.getMetricsFor(output);
+                options.display = display;
+                const node = await MathJax.tex2svgPromise(text, options);
+                if (current !== generation) return;
+                if (node.querySelector('[data-mml-node="merror"]') || !node.querySelector('svg')) {
+                    throw new Error('公式语法有误，请检查 LaTeX 输入。');
+                }
+                output.replaceChildren(node);
+                MathJax.startup.document.clear();
+                MathJax.startup.document.updateDocument();
+                rendered = { text, display, node };
+                enableInsert(!submitting);
+            } catch (error) {
+                if (current === generation) showError(error.message);
+            }
+        });
+    }
 
-    window.addEventListener('message', function(event) {
-        // 接收来自主页面的消息，改变输入框内容
-        if (event.data.type) {
-            if (event.data.type == 'CHANGE_INPUT') {
-                //input.value = event.data.text.replace(/\\\\/g, '\\');
-                input.value = event.data.text;
-                input.focus();
+    function closeFrame() {
+        generation++;
+        rendered = null;
+        enableInsert(false);
+        send({ type: 'CLOSE_FORMULA' });
+    }
 
-                // 行间公式自动勾选
-                if (event.data.isBlock == "true") $(block).prop('checked', true);
-                else $(block).prop('checked', false);
-                convert();
+    function insertFormula() {
+        if (insert.disabled || submitting || !rendered) return;
+        const node = rendered.node.cloneNode(true);
+        if (rendered.display) {
+            node.style.cssText = 'overflow-x:auto; outline:0; display:block; text-align:center; margin:15px 0;';
+            node.setAttribute('display', 'true');
+            node.querySelector('svg').style.cssText = 'height:auto; max-width:300% !important;';
+        }
+        node.setAttribute('data-formula', rendered.text);
+        node.querySelectorAll('mjx-assistive-mml').forEach(element => element.remove());
+        const wrapper = document.createElement('span');
+        wrapper.style.cursor = 'pointer';
+        wrapper.appendChild(node);
+        submitting = true;
+        enableInsert(false);
+        send({ type: 'INSERT_FORMULA', text: wrapper.outerHTML });
+    }
+
+    input.addEventListener('input', convert);
+    block.addEventListener('change', convert);
+    insert.addEventListener('click', insertFormula);
+    document.getElementById('close').addEventListener('click', closeFrame);
+    document.getElementById('cancel').addEventListener('click', closeFrame);
+    window.addEventListener('message', event => {
+        if (event.source !== parent || !/^https?:\/\/mp\.weixin\.qq\.com$/.test(event.origin) ||
+            !event.data || typeof event.data !== 'object') return;
+        parentOrigin = event.origin;
+        const message = event.data;
+        if (message.type === 'FORMULA_PING') {
+            send({ type: 'FORMULA_READY' });
+        } else if (message.type === 'CHANGE_INPUT' && typeof message.text === 'string') {
+            submitting = false;
+            input.value = message.text;
+            block.checked = message.isBlock === 'true';
+            input.focus();
+            convert();
+        } else if (message.type === 'FORMULA_RESULT' && typeof message.success === 'boolean') {
+            submitting = false;
+            if (message.success) {
+                input.value = '';
+                rendered = null;
+                enableInsert(false);
+            } else {
+                enableInsert(!!rendered);
+                alert(typeof message.error === 'string' ? message.error : '插入失败，请重试。');
             }
         }
     });
-
-    // 防止窗口失去焦点
-    $(window).focusout(function() {
-        setTimeout(function() {
-            $('#input').focus();
-        }, 10);
-    });
-
-    $('#input').keydown(function(event) {
-        // 处理shift+enter
-        if (event.keyCode == 13 && event.shiftKey) {
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeFrame();
+        } else if (event.key === 'Enter' && event.shiftKey) {
+            event.preventDefault();
             insertFormula();
         }
     });
-
-    $(document).keydown(function(event) {
-        // 处理esc
-        if (event.keyCode == 27) {
-            closeFrame();
-        }
-    });
-});
+    enableInsert(false);
+})();

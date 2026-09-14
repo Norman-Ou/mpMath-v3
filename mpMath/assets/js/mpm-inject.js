@@ -1,42 +1,136 @@
-// 当前编辑对象和是否在编辑(插入)模式
-let editing, editingMode;
+(() => {
+    if (window.mpMathBridgeLoaded) return;
+    window.mpMathBridgeLoaded = true;
+    let editing = null;
+    let bookmark = null;
+    let pendingInput = null;
+    let popup = null;
+    let popupReady = false;
+    const frames = new WeakSet();
+    const documents = new WeakSet();
 
-// 等待文档加载完毕
-var readyStateCheckInterval = setInterval(function() {
-    if (document.readyState === 'complete') {
-        clearInterval(readyStateCheckInterval);
+    function popupOrigin() {
+        return popup ? new URL(popup.src).origin : '';
+    }
 
-        // 处理来自iframe的消息
-        window.addEventListener("message", function(event) {
-            if (event.data.type) {
-                // 处理关闭公式编辑框的消息
-                if (event.data.type == 'CLOSE_FORMULA') {
-                    document.getElementById('popup').style.display = 'none';
-                    setTimeout(function() { $('#ueditor_0')[0].focus(); }, 10); // 重置焦点
-                    editingMode = false; // 取消编辑
+    function send(message) {
+        if (popup?.isConnected) popup.contentWindow.postMessage(message, popupOrigin());
+    }
+
+    function editor() {
+        const frame = document.getElementById('ueditor_0');
+        if (!frame?.contentDocument?.querySelector('.view') || !window.UE?.getEditor) return null;
+        const instance = window.UE.getEditor('js_editor');
+        return instance && instance.isReady !== false && typeof instance.execCommand === 'function' ? instance : null;
+    }
+
+    function flushInput() {
+        if (popupReady && pendingInput) {
+            send(pendingInput);
+            pendingInput = null;
+        }
+    }
+
+    function openFormula(formula = null) {
+        const instance = editor();
+        if (!instance || !popup) {
+            alert('编辑器尚未就绪，请稍后重试。');
+            return;
+        }
+        editing = formula;
+        bookmark = formula ? null : instance.selection?.getBookmark?.();
+        pendingInput = {
+            type: 'CHANGE_INPUT',
+            text: formula?.getAttribute('data-formula') || '',
+            isBlock: formula?.getAttribute('display') || 'false'
+        };
+        popup.style.display = 'block';
+        popup.focus();
+        flushInput();
+    }
+
+    function closeFormula() {
+        if (popup) popup.style.display = 'none';
+        pendingInput = null;
+        editing = null;
+        bookmark = null;
+        document.getElementById('ueditor_0')?.contentWindow?.focus();
+    }
+
+    window.addEventListener('mpmath:open', () => openFormula());
+    window.addEventListener('message', event => {
+        if (!popup || event.source !== popup.contentWindow || event.origin !== popupOrigin() ||
+            !event.data || typeof event.data !== 'object') return;
+        const message = event.data;
+        if (message.type === 'FORMULA_READY') {
+            popupReady = true;
+            flushInput();
+        } else if (message.type === 'CLOSE_FORMULA') {
+            closeFormula();
+        } else if (message.type === 'INSERT_FORMULA' && typeof message.text === 'string' &&
+            popup.style.display !== 'none') {
+            try {
+                const instance = editor();
+                if (!instance) throw new Error('编辑器尚未就绪，请稍后重试。');
+                const template = document.createElement('template');
+                template.innerHTML = message.text;
+                const wrapper = template.content.firstElementChild;
+                const formula = wrapper?.firstElementChild;
+                if (wrapper?.tagName !== 'SPAN' || !formula?.hasAttribute('data-formula') ||
+                    !formula.querySelector('svg')) throw new Error('公式内容无效，请重新渲染。');
+                if (editing) {
+                    if (!editing.isConnected) throw new Error('原公式已移除，请关闭后重新插入。');
+                    editing.replaceWith(formula);
+                    instance.fireEvent?.('contentchange');
+                } else {
+                    if (bookmark) instance.selection?.moveToBookmark?.(bookmark);
+                    instance.execCommand('insertHTML', '\u00a0' + wrapper.outerHTML + '\u00a0');
                 }
-                // 处理插入公式的消息
-                else if (event.data.type == 'INSERT_FORMULA') {
-                    // 如果在编辑模式就替换当前编辑元素, 否则插入新元素
-                    if (editingMode == true) {
-                        let beg = event.data.text.indexOf('>') + 1;
-                        let end = event.data.text.lastIndexOf('<') - 1;
-                        editing.innerHTML = event.data.text.substring(beg, end);
-                        editingMode = false; // 还原为非编辑模式
-                    } else {
-                        window.UE.getEditor('js_editor').execCommand('insertHTML', '\xA0' + event.data.text + '\xA0');
-                    }
-                }
+                send({ type: 'FORMULA_RESULT', success: true });
+                closeFormula();
+            } catch (error) {
+                send({ type: 'FORMULA_RESULT', success: false, error: error.message });
+            }
+        }
+    });
+
+    function bindFrame(frame) {
+        const doc = frame.contentDocument;
+        if (!doc || documents.has(doc)) return;
+        documents.add(doc);
+        doc.addEventListener('keydown', event => {
+            if ((event.ctrlKey || event.metaKey) && (event.code === 'Slash' || event.key === '/')) {
+                event.preventDefault();
+                openFormula();
             }
         });
-
-        // 编辑事件监听
-        $('#ueditor_0').contents().find('.view').on('click', '[data-formula]', function(event) {
-            $('#popup')[0].style.display = 'block';
-            $('#popup')[0].contentWindow.postMessage({ type: 'CHANGE_INPUT', text: $(this).attr('data-formula'), isBlock: $(this).attr('display') }, '*');
-            setTimeout(function() { $('#popup')[0].focus(); }, 10);
-            editing = this.parentElement;
-            editingMode = true;
+        doc.addEventListener('click', event => {
+            const formula = event.target.closest?.('[data-formula]');
+            if (formula) {
+                event.preventDefault();
+                openFormula(formula);
+            }
         });
     }
-});
+
+    function initialize() {
+        const currentPopup = document.getElementById('popup');
+        if (currentPopup !== popup) {
+            popup = currentPopup;
+            popupReady = false;
+            // The handshake also covers a popup loaded before this bridge was injected.
+            if (popup) {
+                popup.addEventListener('load', () => send({ type: 'FORMULA_PING' }));
+                if (popup.dataset.mpmLoaded === 'true') send({ type: 'FORMULA_PING' });
+            }
+        }
+        const frame = document.getElementById('ueditor_0');
+        if (frame && !frames.has(frame)) {
+            frames.add(frame);
+            frame.addEventListener('load', () => bindFrame(frame));
+            bindFrame(frame);
+        }
+    }
+    new MutationObserver(initialize).observe(document.documentElement, { childList: true, subtree: true });
+    initialize();
+})();

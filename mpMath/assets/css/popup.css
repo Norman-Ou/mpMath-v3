@@ -1,5 +1,7 @@
 body {
     background: transparent;
+    margin: 0;
+    padding: 100px 0 24px;
 }
 
 .mpm-checkbox {

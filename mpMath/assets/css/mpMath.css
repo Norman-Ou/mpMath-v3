@@ -2,7 +2,7 @@
     display: none;
     position: fixed;
     z-index: 5000;
-    padding-top: 100px;
+    padding: 0;
     top: 0;
     bottom: 0;
     left: 0;
@@ -13,4 +13,8 @@
     white-space: nowrap;
     overflow: auto;
     background-color: rgba(0, 0, 0, 0.4);
+}
+
+#js_editor_insert_formula .tpl_dropdown_menu[hidden] {
+    display: none !important;
 }

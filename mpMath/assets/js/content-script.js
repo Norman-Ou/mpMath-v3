@@ -1,151 +1,96 @@
-function formulaClick(event) {
-    $('#popup').css('display', 'block');
-    $('#popup')[0].contentWindow.postMessage({ type: 'CHANGE_INPUT', text: '' }, '*');
-    $('#popup')[0].focus();
-    $('.tpl_dropdown_menu', '.formula').css('display', 'none');
-    if (event) event.stopPropagation();
-}
+(() => {
+    if (globalThis.mpMathContentLoaded) return;
+    globalThis.mpMathContentLoaded = true;
 
-function fixClick(event) {
-    revise();
-    $('.tpl_dropdown_menu', '.formula').css('display', 'none');
-    event.stopPropagation();
-}
+    function hideMenus() {
+        document.querySelectorAll('#js_editor_insert_formula ul').forEach(menu => {
+            menu.hidden = true;
+        });
+    }
 
-function guideClick(event) {
-    alert('指南还在施工!');
-    $('.tpl_dropdown_menu', '.formula').css('display', 'none');
-    event.stopPropagation();
-}
-
-setTimeout(function () {
-    // 注入脚本
-    let script_inject = document.createElement('script');
-    script_inject.src = chrome.runtime.getURL('assets/js/mpm-inject.js');
-    script_inject.onload = function () {
-        this.remove;
-    };
-    (document.head || document.documentElement).appendChild(script_inject);
-}, 1000);
-
-// 等待文档加载完毕
-chrome.runtime.sendMessage({}, function (response) {
-    var readyStateCheckInterval = setInterval(function () {
-        if (document.readyState === 'complete') {
-            clearInterval(readyStateCheckInterval);
-
-            if ($('#js_media_list')[0]) {
-                // 公式编辑弹窗
-                let iframe = document.createElement('iframe');
-                iframe.src = chrome.runtime.getURL('./pages/popup.html');
-                iframe.setAttribute('class', 'mpm-modal');
-                iframe.frameBorder = 0;
-                iframe.allowTransparency = true;
-                iframe.id = 'popup';
-                iframe.style.display = 'none';
-                document.body.appendChild(iframe);
-                console.log(iframe)
-
-                // 上方菜单栏公式按钮
-                let formulaMenu = document.createElement('li');
-                formulaMenu.setAttribute('class', 'tpl_item tpl_item_dropdown jsInsertIcon formula');
-                formulaMenu.id = 'js_editor_insert_formula';
-                $(formulaMenu).append('<span>公式</span>');
-
-                // 分别为 下拉菜单栏、插入公式、修复SVG、指南
-                let dropdownMenu = document.createElement('ul');
-                dropdownMenu.setAttribute('class', 'tpl_dropdown_menu');
-                dropdownMenu.style.display = 'none';
-
-                let formulaInsertItem = document.createElement('li');
-                formulaInsertItem.setAttribute('class', 'tpl_dropdown_menu_item');
-                formulaInsertItem.innerText = '插入公式 ⌘/';
-                formulaInsertItem.onclick = formulaClick;
-                dropdownMenu.appendChild(formulaInsertItem);
-
-                let formulaFixItem = document.createElement('li');
-                formulaFixItem.setAttribute('class', 'tpl_dropdown_menu_item');
-                formulaFixItem.innerText = '修复SVG';
-                formulaFixItem.onclick = fixClick;
-                dropdownMenu.appendChild(formulaFixItem);
-
-                let formulaGuide = document.createElement('li');
-                formulaGuide.setAttribute('class', 'tpl_dropdown_menu_item');
-                formulaGuide.innerText = '指南';
-                formulaGuide.onclick = guideClick;
-                dropdownMenu.appendChild(formulaGuide);
-
-                formulaMenu.appendChild(dropdownMenu);
-                $(formulaMenu).click(function () {
-                    $(dropdownMenu).css('display', 'none');
-                });
-
-                $(document).click(function(event) {
-                    // 检查点击的元素是否是formulaMenu
-                    if (!$(event.target).closest(formulaMenu).length) {
-                        // 如果不是，下拉菜单消失
-                        $(dropdownMenu).css('display', 'none');
-                    }
-                    else {
-                        // 如果是，下拉菜单显示
-                        $(dropdownMenu).css('display', 'block');
-                    }
-                });
-
-                $('#js_media_list')[0].appendChild(formulaMenu);
-
-                // 热键绑定 Ctrl/⌘ + /
-                $('#ueditor_0').contents().find('.view').keydown(function (event) {
-                    let keyCode = event.keyCode || event.which || event.charCode;
-                    let ctrlKey = event.ctrlKey || event.metaKey;
-                    if (ctrlKey && keyCode == 191) {
-                        formulaClick();
-                    }
-                });
+    // SVG repair originally based on https://github.com/kongxiangyan/bookmarklet.
+    async function revise() {
+        const view = document.getElementById('ueditor_0')?.contentDocument?.querySelector('.view');
+        if (!view) {
+            alert('编辑器尚未就绪，请稍后重试。');
+            return;
+        }
+        const embeds = [...view.querySelectorAll('embed')];
+        const results = await Promise.allSettled(embeds.map(async embed => {
+            const response = await fetch(embed.src, { signal: AbortSignal.timeout(15000) });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const doc = new DOMParser().parseFromString(await response.text(), 'image/svg+xml');
+            const svg = doc.documentElement;
+            if (doc.querySelector('parsererror') || svg.localName !== 'svg' ||
+                svg.namespaceURI !== 'http://www.w3.org/2000/svg') {
+                throw new Error('无效的 SVG');
             }
-        }
-    }, 10);
-});
+            // Fetched SVG is content, never executable markup.
+            svg.querySelectorAll('script, foreignObject, iframe, object, embed').forEach(node => node.remove());
+            for (const node of [svg, ...svg.querySelectorAll('*')]) {
+                for (const attr of [...node.attributes]) {
+                    if (/^on/i.test(attr.name) ||
+                        (attr.localName === 'href' && !attr.value.startsWith('#'))) {
+                        node.removeAttributeNode(attr);
+                    }
+                }
+            }
+            if (!embed.isConnected) throw new Error('原始元素已移除');
+            embed.replaceWith(view.ownerDocument.importNode(svg, true));
+        }));
+        const success = results.filter(result => result.status === 'fulfilled').length;
+        alert(`修复了 ${success} 个目标！${success < embeds.length ? ` ${embeds.length - success} 个失败，请检查 SVG 地址或网络后重试。` : ''}`);
+    }
 
-/*
-以下代码源于 https://github.com/kongxiangyan/bookmarklet
-修复修正微信公众号图文编辑器粘贴 SVG 时部分转换为 Embed 导致不支持 Dark Mode 的问题
-*/
-function loadSVG(src) {
-    return new Promise((resolve) => {
-        let ajax = new XMLHttpRequest();
-        ajax.open('GET', src, true);
-        ajax.send();
-        ajax.onload = function(e) {
-            let div = document.createElement('div');
-            div.innerHTML = ajax.responseText;
-            let svg = div.childNodes[1];
-            resolve(svg);
+    function initialize() {
+        const toolbar = document.getElementById('js_media_list');
+        if (!toolbar || !document.body) return;
+        if (!document.getElementById('popup')) {
+            const iframe = document.createElement('iframe');
+            iframe.id = 'popup';
+            iframe.className = 'mpm-modal';
+            iframe.title = '公式编辑器';
+            iframe.src = chrome.runtime.getURL('pages/popup.html');
+            iframe.style.display = 'none';
+            iframe.style.border = '0';
+            iframe.addEventListener('load', () => { iframe.dataset.mpmLoaded = 'true'; });
+            document.body.appendChild(iframe);
         }
-    })
-}
+        if (document.getElementById('js_editor_insert_formula')) return;
+        const menu = document.createElement('li');
+        menu.id = 'js_editor_insert_formula';
+        menu.className = 'tpl_item tpl_item_dropdown jsInsertIcon formula';
+        const label = document.createElement('span');
+        label.textContent = '公式';
+        menu.appendChild(label);
+        const dropdown = document.createElement('ul');
+        dropdown.className = 'tpl_dropdown_menu';
+        dropdown.hidden = true;
+        const actions = [
+            ['插入公式 Ctrl/⌘+/', () => window.dispatchEvent(new Event('mpmath:open'))],
+            ['修复SVG', revise],
+            ['指南', () => alert('输入 LaTeX 后点击插入。Ctrl/⌘+/ 新建公式，Shift+Enter 插入，Esc 关闭。点击已有公式可再次编辑。')]
+        ];
+        for (const [text, action] of actions) {
+            const item = document.createElement('li');
+            item.className = 'tpl_dropdown_menu_item';
+            item.textContent = text;
+            item.addEventListener('click', event => {
+                event.stopPropagation();
+                hideMenus();
+                action();
+            });
+            dropdown.appendChild(item);
+        }
+        menu.appendChild(dropdown);
+        menu.addEventListener('click', event => {
+            event.stopPropagation();
+            dropdown.hidden = !dropdown.hidden;
+        });
+        toolbar.appendChild(menu);
+    }
 
-function revise() {
-    console.log(`【MP_SVG_REVISE】 Start`);
-    let ueditor = document.getElementById('ueditor_0');
-    let view = ueditor.contentDocument.getElementsByClassName('view')[0];
-    let embeds = view.querySelectorAll('embed');
-    console.log(`【MP_SVG_REVISE】 检测到 ${embeds.length} 个目标……`);
-    let promises = [];
-    embeds.forEach((embed, index) => {
-        console.log(`【MP_SVG_REVISE】 第 ${index} 个……`);
-        let parent_node = embed.parentNode;
-        promises.push(new Promise(resolve => {
-            loadSVG(embed.src).then(svg => {
-                parent_node.insertBefore(svg, embed);
-                parent_node.removeChild(embed);
-                resolve();
-            })
-        }))
-    });
-    Promise.all(promises).then(() => {
-        console.log('Revise complete！');
-        //alert('Revise complete！');
-        alert(`修复了 ${embeds.length} 个目标!`);
-    })
-}
+    document.addEventListener('click', hideMenus);
+    new MutationObserver(initialize).observe(document.documentElement, { childList: true, subtree: true });
+    initialize();
+})();
