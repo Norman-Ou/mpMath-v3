@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
+const extension = process.env.MPMATH_EXTENSION_PATH || path.join(root, 'mpMath');
 const test = base.extend({
     context: async ({}, use) => {
         const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'mpmath-test-'));
@@ -12,8 +13,8 @@ const test = base.extend({
             executablePath: process.env.MPMATH_CHROME_PATH,
             headless: true,
             args: [
-                `--disable-extensions-except=${path.join(root, 'mpMath')}`,
-                `--load-extension=${path.join(root, 'mpMath')}`
+                `--disable-extensions-except=${extension}`,
+                `--load-extension=${extension}`
             ]
         });
         await context.route('https://mp.weixin.qq.com/**', async route => {
@@ -68,11 +69,11 @@ async function popupFrame(page) {
 }
 
 test('manifest resources exist and the MV3 worker registers current action rules', async ({ context }) => {
-    const manifest = JSON.parse(await fs.readFile(path.join(root, 'mpMath/manifest.json'), 'utf8'));
+    const manifest = JSON.parse(await fs.readFile(path.join(extension, 'manifest.json'), 'utf8'));
     const resources = [manifest.background.service_worker, ...Object.values(manifest.icons),
         ...manifest.content_scripts.flatMap(script => [...(script.js || []), ...(script.css || [])]),
         ...manifest.web_accessible_resources.flatMap(rule => rule.resources)];
-    for (const resource of resources) await fs.access(path.join(root, 'mpMath', resource));
+    for (const resource of resources) await fs.access(path.join(extension, resource));
     expect(manifest.manifest_version).toBe(3);
     let worker = context.serviceWorkers()[0];
     if (!worker) worker = await context.waitForEvent('serviceworker');
@@ -107,6 +108,120 @@ test('renders, inserts and re-edits formulas without damaging adjacent text', as
     await expect(popup.locator('#block')).toBeChecked();
     await popup.locator('#input').press('Escape');
     await expect(page.locator('#popup')).toBeHidden();
+});
+
+test('current WeChat bridge works without UE and with a renumbered editor iframe', async ({ page }) => {
+    await page.goto('https://mp.weixin.qq.com/editor?modern&renumbered');
+    expect(await page.evaluate(() => typeof window.UE)).toBe('undefined');
+    const editor = page.frameLocator('#ueditor_7');
+    await editor.locator('.view').press('Control+/');
+    await expect(page.locator('#popup')).toBeVisible();
+    const popup = page.frameLocator('#popup');
+    await render(popup, 'x+1');
+    await popup.locator('#insert').click();
+    await expect(page.locator('#popup')).toBeHidden();
+    const calls = await page.evaluate(() => apiCalls);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ apiName: 'mp_editor_insert_html', apiParam: { isSelect: false } });
+    expect(calls[0].apiParam.html).toContain('data-formula="x+1"');
+    await editor.locator('[data-formula]').click();
+    await render(popup, 'x+2');
+    await popup.locator('#insert').click();
+    await expect(page.locator('#popup')).toBeHidden();
+    await expect(editor.locator('[data-formula]')).toHaveCount(1);
+    await expect(editor.locator('[data-formula]')).toHaveAttribute('data-formula', 'x+2');
+    expect(await page.evaluate(() => apiCalls.length)).toBe(1);
+});
+
+test('prefers the current bridge even when legacy getEditor throws', async ({ page }) => {
+    await page.goto('https://mp.weixin.qq.com/editor?modern');
+    await page.evaluate(() => {
+        window.legacyCalls = 0;
+        window.UE = { getEditor() { window.legacyCalls++; throw new Error('not import language file'); } };
+    });
+    const popup = await open(page);
+    await render(popup, 'a');
+    await popup.locator('#insert').click();
+    await expect(page.locator('#popup')).toBeHidden();
+    expect(await page.evaluate(() => [legacyCalls, insertions.length])).toEqual([0, 1]);
+});
+
+test('current bridge can open before the legacy iframe exists', async ({ page }) => {
+    await page.goto('https://mp.weixin.qq.com/editor?modern');
+    await page.evaluate(() => document.getElementById('ueditor_0').remove());
+    const popup = await open(page);
+    await render(popup, 'b');
+    await page.evaluate(() => mountEditor());
+    await expect(page.frameLocator('#ueditor_0').locator('.view')).toBeVisible();
+    await popup.locator('#insert').click();
+    await expect(page.locator('#popup')).toBeHidden();
+    expect(await page.evaluate(() => insertions.length)).toBe(1);
+});
+
+test('waits for bridge success and prevents duplicate or cancelled in-flight inserts', async ({ page }) => {
+    await page.goto('https://mp.weixin.qq.com/editor?modern');
+    await page.evaluate(() => { window.apiReply = 'hold'; });
+    const popup = await open(page);
+    await render(popup, 'c');
+    await popup.locator('#insert').click();
+    await expect.poll(() => page.evaluate(() => apiCalls.length)).toBe(1);
+    await expect(page.locator('#popup')).toBeVisible();
+    await expect(popup.locator('#input')).toBeDisabled();
+    await expect(popup.locator('#cancel')).toBeDisabled();
+    await expect(popup.locator('#insert')).toBeDisabled();
+    const frame = await popupFrame(page);
+    await frame.evaluate(() => {
+        parent.postMessage({ type: 'INSERT_FORMULA', text: '<span>duplicate</span>' }, 'https://mp.weixin.qq.com');
+        parent.postMessage({ type: 'CLOSE_FORMULA' }, 'https://mp.weixin.qq.com');
+    });
+    expect(await page.evaluate(() => apiCalls.length)).toBe(1);
+    await page.evaluate(() => completeInsertion());
+    await expect(page.locator('#popup')).toBeHidden();
+    expect(await page.evaluate(() => insertions.length)).toBe(1);
+});
+
+for (const reply of ['failure', 'throw']) {
+    test(`bridge ${reply} retains the formula and allows retry without falling back`, async ({ page }) => {
+        await page.goto('https://mp.weixin.qq.com/editor?modern');
+        await page.evaluate(reply => {
+            window.apiReply = reply;
+            window.UE = { getEditor() { throw new Error('Legacy API must not be used'); } };
+        }, reply);
+        const popup = await open(page);
+        await render(popup, 'd');
+        const dialog = page.waitForEvent('dialog');
+        await popup.locator('#insert').click();
+        const error = await dialog;
+        expect(error.message()).toBe(reply === 'failure' ? 'editor rejected insert' : 'bridge unavailable');
+        await error.dismiss();
+        await expect(page.locator('#popup')).toBeVisible();
+        await expect(popup.locator('#input')).toHaveValue('d');
+        await expect(popup.locator('#input')).toBeEnabled();
+        expect(await page.evaluate(() => insertions.length)).toBe(0);
+        await page.evaluate(() => { window.apiReply = 'success'; });
+        await popup.locator('#insert').click();
+        await expect(page.locator('#popup')).toBeHidden();
+        expect(await page.evaluate(() => insertions.length)).toBe(1);
+    });
+}
+
+test('bridge timeout reports uncertain insertion and unlocks the dialog', async ({ page }) => {
+    await page.goto('https://mp.weixin.qq.com/editor?modern');
+    const popup = await open(page);
+    await render(popup, 'e');
+    await page.evaluate(() => { window.apiReply = 'hold'; });
+    await page.clock.install();
+    await popup.locator('#insert').click();
+    await expect.poll(() => page.evaluate(() => apiCalls.length)).toBe(1);
+    const dialog = page.waitForEvent('dialog');
+    const advance = page.clock.fastForward(16000);
+    const error = await dialog;
+    expect(error.message()).toContain('请先检查正文是否已插入');
+    await error.dismiss();
+    await advance;
+    await expect(popup.locator('#input')).toHaveValue('e');
+    await expect(popup.locator('#input')).toBeEnabled();
+    await expect(popup.locator('#insert')).toBeEnabled();
 });
 
 test('late editor mounting, iframe reload and replacement bind exactly once', async ({ page }) => {

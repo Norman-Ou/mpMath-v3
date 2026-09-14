@@ -2,9 +2,9 @@
 
 在微信公众号图文编辑器中使用 LaTeX 编写、预览和插入 SVG 公式。
 
-**当前版本：0.3.0** · **Manifest V3** · **MIT 开源**
+**当前版本：0.3.1** · **Manifest V3** · **MIT 开源**
 
-[下载 v0.3.0](https://github.com/Norman-Ou/mpMath-v3/releases/tag/v0.3.0) · [问题反馈](https://github.com/Norman-Ou/mpMath-v3/issues) · [更新记录](CHANGELOG.md)
+[下载 v0.3.1](https://github.com/Norman-Ou/mpMath-v3/releases/tag/v0.3.1) · [问题反馈](https://github.com/Norman-Ou/mpMath-v3/issues) · [更新记录](CHANGELOG.md)
 
 本项目由 [Norman-Ou](https://github.com/Norman-Ou) 维护，基于 [原版 mpMath](https://github.com/latentcat/mpmath) 继续适配新版 Chrome。感谢原作者 ciaochaos、CPunisher 及原项目贡献者。本仓库是独立维护版本，与微信官方无关。
 
@@ -19,10 +19,10 @@
 
 ## 下载与安装
 
-1. 下载 [mpMath-v3-0.3.0.zip](https://github.com/Norman-Ou/mpMath-v3/releases/download/v0.3.0/mpMath-v3-0.3.0.zip)，并解压到一个长期保留的文件夹。
+1. 下载 [mpMath-v3-0.3.1.zip](https://github.com/Norman-Ou/mpMath-v3/releases/download/v0.3.1/mpMath-v3-0.3.1.zip)，并解压到一个长期保留的文件夹。
 2. 在桌面 Chrome 打开 `chrome://extensions/`。
 3. 开启右上角「开发者模式」。
-4. 点击「加载已解压的扩展程序」，选择解压后的 **`mpMath-v3-0.3.0` 文件夹**，其中应直接包含 `manifest.json`、`assets` 和 `pages`。
+4. 点击「加载已解压的扩展程序」，选择解压后的 **`mpMath-v3-0.3.1` 文件夹**，其中应直接包含 `manifest.json`、`assets` 和 `pages`。
 5. 停用旧版 mpMath，再打开或刷新微信公众号图文编辑页面。
 
 也可以下载本仓库源码，选择其中的 `mpMath` 子目录加载。安装和使用无需运行 npm，公式渲染脚本随扩展提供。
@@ -32,6 +32,8 @@
 更新时替换文件，在扩展管理页点击「重新加载」，再刷新公众号页面。本仓库的修复通过 GitHub 发布，原项目的商店版本与旧 CRX 不代表本版本。
 
 ## 使用
+
+0.3.0 若持续提示「编辑器尚未就绪」，请升级至 0.3.1 并刷新公众号页面；本版已接入新编辑器的插入接口。
 
 打开微信公众号图文编辑页面，在素材工具栏找到「公式」，选择「插入公式」。输入 LaTeX，等待预览生成后点击「插入」。勾选「行间公式」可插入独立成行的公式。
 
@@ -47,9 +49,9 @@
 
 ## 兼容性与已知限制
 
-- 0.3.0 已在 **Chrome for Testing 153.0.8010.36** 上通过 **12 项浏览器回归测试**。测试加载真实扩展，使用本地模拟的公众号 UEditor 页面。
+- 0.3.1 已在 **Chrome for Testing 153.0.8010.36** 上通过 **19 项浏览器回归测试**。测试加载真实扩展，使用本地模拟的新编辑器 JSAPI 及旧 UEditor 页面。
 - 尚未登录真实公众号验证当前线上编辑器及「保存草稿后重新打开」。微信的编辑器结构或保存过滤规则发生变化时，可能需要继续适配；请先在测试草稿中确认效果。
-- 当前集成依赖公众号页面的 UEditor 接口。没有出现「公式」菜单时，请先确认已刷新页面，并在本仓库提交问题。
+- 优先使用公众号页面的 `__MP_Editor_JSAPI__` 插入接口，兼容旧 UEditor；快捷键与再次编辑仍依赖编辑器 DOM。没有出现「公式」菜单时，请先确认已刷新页面，并在本仓库提交问题。
 - SVG 修复受资源地址、网络及跨域访问限制影响；失败的原始 embed 会保留。
 - 本轮未实测 Edge、Firefox 或移动端。
 
@@ -79,3 +81,5 @@ npm test
 - 原作者：ciaochaos（CUC）、CPunisher（BUAA）。
 - 本分支维护：Norman-Ou。
 - 遵循 [MIT License](LICENSE)，保留原作者版权声明及项目提交历史。
+
+新编辑器接口适配参考 [Jw-23 在原项目的讨论](https://github.com/latentcat/mpmath/issues/11) 和 [wongyah 的修复方案](https://github.com/latentcat/mpmath/pull/12)，感谢分享。

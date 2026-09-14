@@ -10,7 +10,8 @@
 
     // SVG repair originally based on https://github.com/kongxiangyan/bookmarklet.
     async function revise() {
-        const view = document.getElementById('ueditor_0')?.contentDocument?.querySelector('.view');
+        const view = [...document.querySelectorAll('iframe[id^="ueditor_"]')]
+            .map(frame => frame.contentDocument?.querySelector('.view')).find(Boolean);
         if (!view) {
             alert('编辑器尚未就绪，请稍后重试。');
             return;

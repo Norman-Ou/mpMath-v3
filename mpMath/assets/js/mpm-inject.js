@@ -6,6 +6,7 @@
     let pendingInput = null;
     let popup = null;
     let popupReady = false;
+    let inserting = false;
     const frames = new WeakSet();
     const documents = new WeakSet();
 
@@ -17,11 +18,53 @@
         if (popup?.isConnected) popup.contentWindow.postMessage(message, popupOrigin());
     }
 
+    function editorFrame() {
+        return [...document.querySelectorAll('iframe[id^="ueditor_"]')]
+            .find(frame => frame.contentDocument?.querySelector('.view'));
+    }
+
     function editor() {
-        const frame = document.getElementById('ueditor_0');
+        // WeChat's current editor exposes this bridge instead of a usable UE instance.
+        // See latentcat/mpmath#11 and #12 (Jw-23 / wongyah).
+        const bridge = window.__MP_Editor_JSAPI__;
+        if (typeof bridge?.invoke === 'function') {
+            return {
+                insertHTML: html => new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => reject(new Error(
+                        '插入请求超时，请先检查正文是否已插入，再决定是否重试。'
+                    )), 15000);
+                    const fail = error => {
+                        clearTimeout(timeout);
+                        const detail = typeof error === 'string' ? error : error?.message || error?.errMsg || error?.msg;
+                        reject(new Error(detail || '微信编辑器拒绝了插入请求，请稍后重试。'));
+                    };
+                    try {
+                        bridge.invoke({
+                            apiName: 'mp_editor_insert_html',
+                            apiParam: { html, isSelect: false },
+                            sucCb: () => { clearTimeout(timeout); resolve(); },
+                            errCb: fail
+                        });
+                    } catch (error) {
+                        fail(error);
+                    }
+                })
+            };
+        }
+        const frame = editorFrame();
         if (!frame?.contentDocument?.querySelector('.view') || !window.UE?.getEditor) return null;
-        const instance = window.UE.getEditor('js_editor');
-        return instance && instance.isReady !== false && typeof instance.execCommand === 'function' ? instance : null;
+        try {
+            const instance = window.UE.getEditor('js_editor');
+            if (!instance || instance.isReady === false || typeof instance.execCommand !== 'function') return null;
+            return {
+                selection: instance.selection,
+                insertHTML: html => instance.execCommand('insertHTML', html),
+                notifyChanged: () => instance.fireEvent?.('contentchange')
+            };
+        } catch {
+            // Some current pages still expose UE, but getEditor creates an unusable instance.
+            return null;
+        }
     }
 
     function flushInput() {
@@ -32,6 +75,7 @@
     }
 
     function openFormula(formula = null) {
+        if (inserting) return;
         const instance = editor();
         if (!instance || !popup) {
             alert('编辑器尚未就绪，请稍后重试。');
@@ -54,11 +98,11 @@
         pendingInput = null;
         editing = null;
         bookmark = null;
-        document.getElementById('ueditor_0')?.contentWindow?.focus();
+        editorFrame()?.contentWindow?.focus();
     }
 
     window.addEventListener('mpmath:open', () => openFormula());
-    window.addEventListener('message', event => {
+    window.addEventListener('message', async event => {
         if (!popup || event.source !== popup.contentWindow || event.origin !== popupOrigin() ||
             !event.data || typeof event.data !== 'object') return;
         const message = event.data;
@@ -66,9 +110,10 @@
             popupReady = true;
             flushInput();
         } else if (message.type === 'CLOSE_FORMULA') {
-            closeFormula();
+            if (!inserting) closeFormula();
         } else if (message.type === 'INSERT_FORMULA' && typeof message.text === 'string' &&
-            popup.style.display !== 'none') {
+            popup.style.display !== 'none' && !inserting) {
+            inserting = true;
             try {
                 const instance = editor();
                 if (!instance) throw new Error('编辑器尚未就绪，请稍后重试。');
@@ -81,15 +126,18 @@
                 if (editing) {
                     if (!editing.isConnected) throw new Error('原公式已移除，请关闭后重新插入。');
                     editing.replaceWith(formula);
-                    instance.fireEvent?.('contentchange');
+                    instance.notifyChanged?.();
+                    formula.dispatchEvent(new Event('input', { bubbles: true }));
                 } else {
                     if (bookmark) instance.selection?.moveToBookmark?.(bookmark);
-                    instance.execCommand('insertHTML', '\u00a0' + wrapper.outerHTML + '\u00a0');
+                    await instance.insertHTML('\u00a0' + wrapper.outerHTML + '\u00a0');
                 }
                 send({ type: 'FORMULA_RESULT', success: true });
                 closeFormula();
             } catch (error) {
                 send({ type: 'FORMULA_RESULT', success: false, error: error.message });
+            } finally {
+                inserting = false;
             }
         }
     });
@@ -124,11 +172,12 @@
                 if (popup.dataset.mpmLoaded === 'true') send({ type: 'FORMULA_PING' });
             }
         }
-        const frame = document.getElementById('ueditor_0');
-        if (frame && !frames.has(frame)) {
-            frames.add(frame);
-            frame.addEventListener('load', () => bindFrame(frame));
-            bindFrame(frame);
+        for (const frame of document.querySelectorAll('iframe[id^="ueditor_"]')) {
+            if (!frames.has(frame)) {
+                frames.add(frame);
+                frame.addEventListener('load', () => bindFrame(frame));
+                bindFrame(frame);
+            }
         }
     }
     new MutationObserver(initialize).observe(document.documentElement, { childList: true, subtree: true });

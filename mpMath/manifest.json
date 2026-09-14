@@ -1,6 +1,6 @@
 {
     "name": "mpMath v3",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "description": "微信公众平台公式支持：使用 LaTeX 编辑 SVG 公式，适配新版 Chrome Manifest V3。",
     "permissions": ["declarativeContent"],
     "background": {

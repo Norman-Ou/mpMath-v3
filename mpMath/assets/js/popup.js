@@ -14,6 +14,13 @@
         insert.classList.toggle('weui-desktop-btn_disabled', !enabled);
     }
 
+    function setSubmitting(value) {
+        submitting = value;
+        for (const control of [input, block, document.getElementById('close'), document.getElementById('cancel')]) {
+            control.disabled = value;
+        }
+    }
+
     function send(message) {
         if (parentOrigin) parent.postMessage(message, parentOrigin);
     }
@@ -59,6 +66,7 @@
     }
 
     function closeFrame() {
+        if (submitting) return;
         generation++;
         rendered = null;
         enableInsert(false);
@@ -78,7 +86,7 @@
         const wrapper = document.createElement('span');
         wrapper.style.cursor = 'pointer';
         wrapper.appendChild(node);
-        submitting = true;
+        setSubmitting(true);
         enableInsert(false);
         send({ type: 'INSERT_FORMULA', text: wrapper.outerHTML });
     }
@@ -96,13 +104,13 @@
         if (message.type === 'FORMULA_PING') {
             send({ type: 'FORMULA_READY' });
         } else if (message.type === 'CHANGE_INPUT' && typeof message.text === 'string') {
-            submitting = false;
+            setSubmitting(false);
             input.value = message.text;
             block.checked = message.isBlock === 'true';
             input.focus();
             convert();
         } else if (message.type === 'FORMULA_RESULT' && typeof message.success === 'boolean') {
-            submitting = false;
+            setSubmitting(false);
             if (message.success) {
                 input.value = '';
                 rendered = null;

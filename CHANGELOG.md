@@ -1,5 +1,16 @@
 # 更新记录
 
+## 0.3.1 — 修复新编辑器识别与插入
+
+- 修复只识别旧 `window.UE` 导致新编辑器持续提示「编辑器尚未就绪」的问题。
+- 优先使用 `__MP_Editor_JSAPI__.invoke` 的 `mp_editor_insert_html` 接口，保留旧 UEditor 兼容；新接口可用时不再调用旧 `getEditor`。
+- 等待插入成功回调后关闭弹窗；失败、异常或超时时保留公式并提示，处理中防止重复提交。
+- 支持不同编号的 `ueditor_*` iframe，覆盖快捷键、再次编辑和 SVG 修复的查找逻辑。
+- 新增新接口、缺失或异常的旧 UE、异步成功、失败、重复请求及超时测试，共 19 项浏览器回归测试通过。
+- 延续修正后的安装包结构，解压目录直接包含 `manifest.json`。
+
+接口适配参考原项目 [Issue #11](https://github.com/latentcat/mpmath/issues/11) 与 [PR #12](https://github.com/latentcat/mpmath/pull/12)，感谢 Jw-23 和 wongyah。验证使用 Chrome for Testing 153.0.8010.36 与本地模拟编辑器，真实公众号草稿保存仍待登录验证。
+
 ## 0.3.0 — mpMath v3
 
 微信公众平台公式支持，基于原版 mpMath 的新版 Chrome 适配版本。
